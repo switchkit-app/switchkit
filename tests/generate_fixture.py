@@ -4,7 +4,7 @@ Creates a com.plexapp.plugins.library.db with schema derived from
 actual Plex Media Server exports, not hand-crafted assumptions.
 
 Key differences from previous fabricated fixture (C-A/C-B fixes):
-- Collections: metadata_items with metadata_type=18 + taggings (tag_type=19)
+- Collections: metadata_items with metadata_type=18 + taggings (tag_type=2)
 - Artwork: user_thumb_url / user_art_url columns (not user_thumb / user_art)
 - No fictional 'collections'/'collection_items' tables
 - GUIDs are NOT UNIQUE (real Plex allows same GUID in multiple libraries)
@@ -83,9 +83,6 @@ def create_test_db():
             guid TEXT NOT NULL,
             media_item_count INTEGER DEFAULT 0,
             "index" INTEGER,
-            smart INTEGER DEFAULT 0,
-            min_year INTEGER,
-            max_year INTEGER,
             user_thumb_url TEXT,
             user_art_url TEXT,
             user_banner_url TEXT,
@@ -93,10 +90,11 @@ def create_test_db():
         )
     """)
 
-    # Tags — real Plex schema
+    # Tags — real Plex schema (includes metadata_item_id for scoping)
     db.execute("""
         CREATE TABLE tags (
             id INTEGER PRIMARY KEY,
+            metadata_item_id INTEGER,
             tag TEXT NOT NULL,
             tag_type INTEGER NOT NULL
         )
@@ -282,29 +280,29 @@ def create_test_db():
     # --- Collections (C-A fix: metadata_type=18) ---
     db.execute(
         """INSERT INTO metadata_items
-           (id, library_section_id, metadata_type, title, guid, smart, min_year, max_year)
-           VALUES (300, 0, 18, 'Sci-Fi Favorites', 'collection-scifi', 0, 1999, 2014)"""
+           (id, library_section_id, metadata_type, title, guid)
+           VALUES (300, 0, 18, 'Sci-Fi Favorites', 'collection-scifi')"""
     )
     db.execute(
         """INSERT INTO metadata_items
-           (id, library_section_id, metadata_type, title, guid, smart, min_year, max_year)
-           VALUES (301, 0, 18, 'Best of the 90s', 'collection-90s', 0, 1994, 1999)"""
+           (id, library_section_id, metadata_type, title, guid)
+           VALUES (301, 0, 18, 'Best of the 90s', 'collection-90s')"""
     )
     db.execute(
         """INSERT INTO metadata_items
-           (id, library_section_id, metadata_type, title, guid, smart)
-           VALUES (302, 0, 18, '4K Collection', 'collection-4k', 1)"""
+           (id, library_section_id, metadata_type, title, guid)
+           VALUES (302, 0, 18, '4K Collection', 'collection-4k')"""
     )
     db.execute(
         """INSERT INTO metadata_items
-           (id, library_section_id, metadata_type, title, guid, smart)
-           VALUES (303, 0, 18, 'Modern Movies', 'collection-modern', 0)"""
+           (id, library_section_id, metadata_type, title, guid)
+           VALUES (303, 0, 18, 'Modern Movies', 'collection-modern')"""
     )
 
-    # Collection membership via tags (tag_type=19)
-    # Each collection gets a tag with the collection's GUID
+    # Collection membership via tags (tag_type=2, tag = collection title)
+    # Real Plex: tags(tag_type=2) stores the collection TITLE, not GUID.
     # Sci-Fi Favorites: Matrix, Inception, Interstellar, Dark Knight
-    db.execute("INSERT INTO tags (id, tag, tag_type) VALUES (?, ?, 19)", (tag_id, 'collection-scifi'))
+    db.execute("INSERT INTO tags (id, metadata_item_id, tag, tag_type) VALUES (?, ?, ?, 2)", (tag_id, 300, 'Sci-Fi Favorites'))
     db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (1, ?)", (tag_id,))
     db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (2, ?)", (tag_id,))
     db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (3, ?)", (tag_id,))
@@ -312,13 +310,13 @@ def create_test_db():
     tag_id += 1
 
     # Best of the 90s: Matrix, Pulp Fiction, Fight Club, Forrest Gump, Shawshank
-    db.execute("INSERT INTO tags (id, tag, tag_type) VALUES (?, ?, 19)", (tag_id, 'collection-90s'))
+    db.execute("INSERT INTO tags (id, metadata_item_id, tag, tag_type) VALUES (?, ?, ?, 2)", (tag_id, 301, 'Best of the 90s'))
     for mid in [1, 5, 6, 7, 8]:
         db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (?, ?)", (mid, tag_id))
     tag_id += 1
 
     # Modern Movies: Dune, Everything Everywhere, Oppenheimer
-    db.execute("INSERT INTO tags (id, tag, tag_type) VALUES (?, ?, 19)", (tag_id, 'collection-modern'))
+    db.execute("INSERT INTO tags (id, metadata_item_id, tag, tag_type) VALUES (?, ?, ?, 2)", (tag_id, 303, 'Modern Movies'))
     for mid in [20, 21, 22]:
         db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (?, ?)", (mid, tag_id))
     tag_id += 1

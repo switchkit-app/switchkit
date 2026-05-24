@@ -152,7 +152,12 @@ def parse_guid(guid: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
 
     >>> parse_guid('local://12345')
     ('local', '12345', 'local')
+    >>> parse_guid(None)
+    (None, None, None)  # Guard: null GUIDs exist in real Plex
     """
+    # Guard: null/empty GUIDs can appear for unmatched collection items
+    if not guid:
+        return None, None, None
     # Legacy agents
     match = LEGACY_GUID_PATTERN.search(guid)
     if match:
@@ -233,19 +238,23 @@ class PlexReader:
             logger.info("Plex appears to be running (WAL files detected). "
                         "Copying database to temporary location for safe read...")
             tmp_dir = tempfile.mkdtemp(prefix='switchkit-')
+            self._tmp_dir = tmp_dir  # Assign immediately so _cleanup_tmp runs on failure
             tmp_db = Path(tmp_dir) / db_path.name
             shutil.copy2(db_path, tmp_db)
             if wal_path.exists():
                 shutil.copy2(wal_path, Path(tmp_dir) / wal_path.name)
             if shm_path.exists():
                 shutil.copy2(shm_path, Path(tmp_dir) / shm_path.name)
-            self._tmp_dir = tmp_dir
             db_path = tmp_db
         else:
             self._tmp_dir = None
 
-        # Use pathlib for proper URI encoding
-        db_uri = db_path.as_uri() + "?mode=ro"
+        # Open temp copy read-write (safe: it's a copy) so SQLite can do WAL recovery.
+        # Only the original live DB needs read-only enforcement.
+        if self._tmp_dir:
+            db_uri = db_path.as_uri()
+        else:
+            db_uri = db_path.as_uri() + "?mode=ro"
         self.conn = sqlite3.connect(db_uri, uri=True)
         self.conn.row_factory = sqlite3.Row
 
@@ -422,7 +431,7 @@ class PlexReader:
         cursor = self.conn.execute("""
             SELECT
                 mis.account_id,
-                COALESCE(a.name, 'External User ' || mis.account_id) as user_name,
+                COALESCE(a.name, CASE WHEN mis.account_id = 1 THEN 'Admin' ELSE 'External User ' || mis.account_id END) as user_name,
                 mis.guid,
                 mi.id as metadata_item_id,
                 mi.title,
@@ -516,7 +525,9 @@ class PlexReader:
                     (SELECT COUNT(*) FROM taggings tg
                      WHERE tg.tag_id IN (
                          SELECT t.id FROM tags t
-                         WHERE t.tag_type = 19 AND t.tag = mi.guid
+                         WHERE t.tag_type = 2
+                           AND t.tag = mi.title
+                           AND t.metadata_item_id = mi.id
                      )) as item_count
                 FROM metadata_items mi
                 WHERE metadata_type = 18
@@ -627,8 +638,10 @@ class PlexReader:
 
         Collections are metadata_items with metadata_type=18.
         Membership is via taggings: a tagging links a media item to a
-        tag whose tag_type=19 and tag value is the collection's GUID.
+        tag whose tag_type=2 and tag value is the collection's GUID.
         """
+        # Narrow try/except: only protect the schema-dependent query.
+        # Row processing and external-ID resolution have their own guards.
         try:
             cursor = self.conn.execute("""
                 SELECT
@@ -639,40 +652,51 @@ class PlexReader:
                     mi.title as item_title,
                     mi.guid as item_guid
                 FROM metadata_items coll
-                JOIN tags t ON t.tag_type = 19 AND t.tag = coll.guid
+                JOIN tags t ON t.tag_type = 2
+                            AND t.tag = coll.title
+                            AND t.metadata_item_id = coll.id
                 JOIN taggings tg ON tg.tag_id = t.id
                 JOIN metadata_items mi ON mi.id = tg.metadata_item_id
                 WHERE coll.metadata_type = 18
                 ORDER BY coll.title, mi.title
             """)
-
-            memberships = []
-            for row in self._fetch_batches(cursor):
-                guid = row['item_guid']
-                _, _, fmt = parse_guid(guid)
-
-                ext_provider = None
-                ext_id = None
-
-                if fmt == 'modern' and row['metadata_item_id']:
-                    ext_provider, ext_id = self._resolve_external_id(row['metadata_item_id'])
-                elif fmt == 'legacy':
-                    ext_provider, ext_id, _ = parse_guid(guid)
-
-                memberships.append({
-                    'collection_id': row['collection_id'],
-                    'collection_title': row['collection_title'],
-                    'metadata_item_id': row['metadata_item_id'],
-                    'item_title': row['item_title'],
-                    'item_guid': guid,
-                    'external_id_provider': ext_provider,
-                    'external_id': ext_id,
-                })
-            return memberships
         except sqlite3.Error as e:
             logger.warning("Collection membership schema not found (%s). "
                            "Collection membership data unavailable.", e)
             return []
+
+        # Materialize rows before nested external-ID lookups so a
+        # failed lookup cannot silently discard already-found memberships.
+        memberships = []
+        for row in self._fetch_batches(cursor):
+            guid = row['item_guid']
+            _, _, fmt = parse_guid(guid)
+
+            ext_provider = None
+            ext_id = None
+
+            if fmt == 'modern' and row['metadata_item_id']:
+                try:
+                    ext_provider, ext_id = self._resolve_external_id(row['metadata_item_id'])
+                except sqlite3.Error as e:
+                    logger.warning(
+                        "Could not resolve external ID for collection item %s "
+                        "(%s); keeping membership without external ID",
+                        row['metadata_item_id'], e,
+                    )
+            elif fmt == 'legacy':
+                ext_provider, ext_id, _ = parse_guid(guid)
+
+            memberships.append({
+                'collection_id': row['collection_id'],
+                'collection_title': row['collection_title'],
+                'metadata_item_id': row['metadata_item_id'],
+                'item_title': row['item_title'],
+                'item_guid': guid,
+                'external_id_provider': ext_provider,
+                'external_id': ext_id,
+            })
+        return memberships
 
     def get_all_stats(self) -> dict:
         """Get a complete snapshot of the Plex database for dry-run output.

@@ -36,3 +36,4 @@ test_plan.json
 tests/plex-test.db
 tests/plex-test.db-shm
 tests/plex-test.db-wal
+.vercel

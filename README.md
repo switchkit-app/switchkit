@@ -1,4 +1,4 @@
-# Switch Kit v0.1.0
+# Switch Kit v0.1.3
 
 **Plex → Jellyfin migration readiness inspector.**
 

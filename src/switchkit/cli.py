@@ -7,6 +7,7 @@ Usage:
 
 import json
 import sys
+import sqlite3
 import logging
 import os
 from pathlib import Path
@@ -227,6 +228,12 @@ def inspect(plex_db, output):
         _info(f"Report saved to {output_path}")
         _warn("This file contains viewing history — do not share unredacted.")
 
+    except sqlite3.Error as e:
+        _error(f"Database read error: {e}")
+        sys.exit(1)
+    except Exception as e:
+        _error(f"Unexpected error during inspection: {e}")
+        sys.exit(1)
     finally:
         reader.close()
 
