@@ -223,7 +223,7 @@ def inspect(plex_db, output):
         with open(output_path, 'w') as f:
             json.dump(plan, f, indent=2, default=str)
 
-        _info("Inspect complete. 0 writes. Plex DB was read-only.")
+        _info("Inspect complete. Plex DB was read-only (temp copy created if WAL detected).")
         _info(f"Report saved to {output_path}")
         _warn("This file contains viewing history — do not share unredacted.")
 

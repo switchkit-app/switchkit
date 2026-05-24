@@ -104,7 +104,7 @@ SECTION_TYPE_MAP = {
     12: "photo",
     15: "other",  # DVR
 }
-MEDIA_TYPE_MAP = {1: "movie", 4: "episode", 8: "track", 10: "album"}
+MEDIA_TYPE_MAP = {1: "movie", 2: "show", 3: "season", 4: "episode", 8: "artist", 9: "album", 10: "track"}
 
 # GUID parsing — legacy agents
 LEGACY_GUID_PATTERN = re.compile(
@@ -589,21 +589,24 @@ class PlexReader:
                WHERE view_count > 0 OR view_offset > 0 OR rating IS NOT NULL"""
         ).fetchone()[0]
 
-        # Check how many settings rows have matching metadata_items
+        # Check how many settings rows have matching metadata_items (deduped per H-B)
         joined = self.conn.execute(
             """SELECT COUNT(*) FROM metadata_item_settings mis
-               JOIN metadata_items mi ON mi.guid = mis.guid
+               JOIN (
+                   SELECT guid, MIN(id) as canonical_id
+                   FROM metadata_items GROUP BY guid
+               ) mi_canon ON mi_canon.guid = mis.guid
                WHERE mis.view_count > 0 OR mis.view_offset > 0 OR mis.rating IS NOT NULL"""
         ).fetchone()[0]
 
-        unjoined = migratable_settings - joined
+        unjoined = max(0, migratable_settings - joined)  # never negative
 
-        # Check for duplicate GUIDs
+        # Check for duplicate GUIDs in metadata_items (real library dupes, not multi-user)
         dupes = self.conn.execute(
             """SELECT COUNT(*) FROM (
                    SELECT guid, COUNT(*) as cnt
-                   FROM metadata_item_settings
-                   WHERE view_count > 0 OR view_offset > 0 OR rating IS NOT NULL
+                   FROM metadata_items
+                   WHERE guid IS NOT NULL
                    GROUP BY guid HAVING cnt > 1
                )"""
         ).fetchone()[0]

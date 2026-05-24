@@ -3,8 +3,8 @@ FROM python:3.11-slim
 LABEL org.opencontainers.image.title="Switch Kit"
 LABEL org.opencontainers.image.description="Plex → Jellyfin migration readiness inspector"
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
-LABEL org.opencontainers.image.version="0.1.0"
-LABEL org.opencontainers.image.source="https://github.com/switchkit/plex-to-jellyfin"
+LABEL org.opencontainers.image.version="0.1.3"
+LABEL org.opencontainers.image.source="https://github.com/switchkit-app/switchkit"
 
 WORKDIR /app
 

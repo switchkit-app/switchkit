@@ -24,13 +24,9 @@ def create_test_db():
     db = sqlite3.connect(DB_PATH)
     db.execute("PRAGMA journal_mode=WAL")
 
-    # Schema version
-    db.execute("CREATE TABLE schema_version (schema_version INTEGER)")
-    db.execute("INSERT INTO schema_version VALUES (140)")
-
-    # Migrations
-    db.execute("CREATE TABLE migrations (version INTEGER)")
-    db.execute("INSERT INTO migrations VALUES (140)")
+    # Schema migrations (real Plex uses schema_migrations, not schema_version)
+    db.execute("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY)")
+    db.execute("INSERT INTO schema_migrations VALUES (140)")
 
     # Accounts — local Plex users
     db.execute("""
