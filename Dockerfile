@@ -1,4 +1,4 @@
-FROM python:3.11-slim@sha256:4aded0d8e6cc5da8e12a9fd235b9c1f70534cd3b8f8d24480bcc090c2ff2fd4b
+FROM python:3.11-slim
 
 LABEL org.opencontainers.image.title="Switch Kit"
 LABEL org.opencontainers.image.description="Plex → Jellyfin migration readiness inspector"
