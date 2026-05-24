@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Outputs
+migration-plan.json
+
+# Test
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Audit files (internal)
+audit-*.md
+
+# Test artifacts
+test_plan.json
+tests/plex-test.db
+tests/plex-test.db-shm
+tests/plex-test.db-wal
