@@ -355,18 +355,24 @@ class PlexReader:
 
     def get_users(self) -> list[PlexUser]:
         """Get all Plex user accounts (local)."""
-        rows = self.conn.execute(
-            "SELECT id, name, thumb FROM accounts ORDER BY id"
-        ).fetchall()
+        # Real Plex accounts table may or may not have 'thumb' column.
+        # Query columns that definitely exist: id, name.
+        try:
+            rows = self.conn.execute(
+                "SELECT id, name FROM accounts ORDER BY id"
+            ).fetchall()
+        except sqlite3.Error as e:
+            logger.warning("Cannot read accounts table: %s", e)
+            return []
 
         users = []
         for row in rows:
-            is_managed = row['name'].startswith('Managed User:') or \
+            is_managed = (row['name'] or '').startswith('Managed User:') or \
                          row['name'] == 'Guest'
             users.append(PlexUser(
                 id=row['id'],
-                name=row['name'],
-                thumb=row['thumb'],
+                name=row['name'] or 'Unknown',
+                thumb=None,
                 is_managed=is_managed,
                 is_external=False,
             ))
@@ -501,15 +507,12 @@ class PlexReader:
         """Get all collections (C-A fix: real Plex schema).
 
         Real Plex stores collections as metadata_items with metadata_type=18.
-        Manual collections have smart=0, smart collections have smart=1.
-        Membership is via taggings table, not a collection_items table.
+        Note: smart/manual distinction not available as a column in real Plex.
         """
         try:
             rows = self.conn.execute("""
                 SELECT
-                    id, title,
-                    CASE WHEN smart = 1 THEN 1 ELSE 0 END as is_smart,
-                    min_year, max_year,
+                    id, title, 0 as is_smart,
                     (SELECT COUNT(*) FROM taggings tg
                      WHERE tg.tag_id IN (
                          SELECT t.id FROM tags t
@@ -526,8 +529,6 @@ class PlexReader:
                     title=row['title'],
                     smart=bool(row['is_smart']),
                     item_count=row['item_count'] or 0,
-                    min_year=row['min_year'],
-                    max_year=row['max_year'],
                 )
                 for row in rows
             ]
