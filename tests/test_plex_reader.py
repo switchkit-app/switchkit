@@ -132,7 +132,7 @@ class TestPlexReader:
 
     def test_users(self, reader):
         users = reader.get_users()
-        assert len(users) == 3
+        assert len(users) == 4  # 3 local + 1 external (account_id=99)
         names = {u.name for u in users}
         assert 'admin' in names
         assert 'sarah' in names
@@ -141,6 +141,10 @@ class TestPlexReader:
         managed = [u for u in users if u.is_managed]
         assert len(managed) == 1
         assert managed[0].name == 'Managed User:guest'
+
+        external = [u for u in users if u.is_external]
+        assert len(external) == 1
+        assert external[0].name == 'External User 99'
 
     def test_libraries_includes_music(self, reader):
         """C1/H2 fix: Music library should not be dropped."""
@@ -194,19 +198,19 @@ class TestPlexReader:
 
         # Breaking Bad S01E01 (Pilot) — has parent/grandparent
         pilot = [s for s in episodes if s.title == 'Pilot']
-        if pilot:
-            ws = pilot[0]
-            assert ws.show_title == 'Breaking Bad'
-            assert ws.season_number == 1
-            assert ws.episode_number == 1
+        assert len(pilot) == 1, f"Expected 1 Pilot episode, got {len(pilot)}"
+        ws = pilot[0]
+        assert ws.show_title == 'Breaking Bad'
+        assert ws.season_number == 1
+        assert ws.episode_number == 1
 
         # Breaking Bad S01E02
         cats = [s for s in episodes if "Cat's" in s.title]
-        if cats:
-            ws = cats[0]
-            assert ws.show_title == 'Breaking Bad'
-            assert ws.season_number == 1
-            assert ws.episode_number == 2
+        assert len(cats) == 1, f"Expected 1 'Cat's' episode, got {len(cats)}"
+        ws = cats[0]
+        assert ws.show_title == 'Breaking Bad'
+        assert ws.season_number == 1
+        assert ws.episode_number == 2
 
     def test_modern_guid_watch_states_resolved(self, reader):
         """C1 fix: modern GUID watch states resolve external IDs from DB.
@@ -243,8 +247,8 @@ class TestPlexReader:
 
     def test_collections(self, reader):
         collections = reader.get_collections()
-        # C-A fix: 4 collections (Sci-Fi, 90s, 4K smart, Modern Movies)
-        assert len(collections) == 4
+        # C-A fix: 5 collections (Sci-Fi, 90s, 4K smart, Modern Movies, Awesome Shows)
+        assert len(collections) == 5
         titles = {c.title for c in collections}
         assert 'Sci-Fi Favorites' in titles
         assert 'Best of the 90s' in titles
@@ -270,8 +274,8 @@ class TestPlexReader:
     def test_collection_memberships(self, reader):
         """M6 fix: collection memberships resolved to external IDs."""
         memberships = reader.get_collection_memberships()
-        # Should have the collection items we inserted, including modern Dune
-        assert len(memberships) == 12  # 9 from originals + 3 from Modern Movies
+        # Should have the collection items we inserted, including modern Dune + TV episode
+        assert len(memberships) == 13  # 9 from originals + 3 from Modern Movies + 1 TV episode
 
         # Verify legacy movie in collection (The Matrix, id=1, in collection 1 and 2)
         matrix_m = [m for m in memberships if m['metadata_item_id'] == 1]
@@ -286,6 +290,22 @@ class TestPlexReader:
         assert dune_m[0]['collection_title'] == 'Modern Movies'
         assert dune_m[0]['external_id_provider'] == 'tmdb'
         assert dune_m[0]['external_id'] == '438631'
+
+    def test_collection_membership_tv_episode_resolves_show_external_id(self, reader):
+        """M2 fix: modern TV episodes in collections resolve external IDs from grandparent show."""
+        memberships = reader.get_collection_memberships()
+        episodes = [m for m in memberships
+                    if m['show_title'] == 'Stranger Things' and m['media_type'] == 'episode']
+        assert len(episodes) >= 1, \
+            f"Expected at least 1 Stranger Things episode in collection, got {len(episodes)}"
+        ep = episodes[0]
+        assert ep['external_id_provider'] is not None, \
+            f"TV episode in collection should resolve external ID from show, got provider=None"
+        assert ep['external_id'] is not None, \
+            f"TV episode in collection should resolve external ID from show, got id=None"
+        assert ep['show_title'] == 'Stranger Things'
+        assert ep['season_number'] == 1
+        assert ep['episode_number'] == 1
 
     def test_diagnostics(self, reader):
         diag = reader.get_diagnostics()

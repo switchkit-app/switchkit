@@ -31,8 +31,17 @@ ERR = "[ERROR]"
 
 
 def _use_color() -> bool:
-    """Check if color output should be used."""
-    return os.environ.get('NO_COLOR', '').lower() not in ('1', 'true', 'yes')
+    """Check if color output should be used.
+
+    Per https://no-color.org/: if NO_COLOR is present (any value),
+    color output is disabled.
+    Also disabled when stderr is not a TTY (piped output, CI, Docker logs).
+    """
+    if 'NO_COLOR' in os.environ:
+        return False
+    if not sys.stderr.isatty():
+        return False
+    return True
 
 
 def _info(msg: str) -> None:
@@ -57,27 +66,27 @@ def _error(msg: str) -> None:
 
 
 def _validate_output_path(path_str: str) -> str:
-    """Validate and normalize output path (C6 fix: prevent directory traversal).
+    """Validate and normalize output path.
+
+    Blocks paths containing '..' segments to prevent accidental writes
+    outside expected directories (relevant in Docker/container contexts).
+    Requires .json extension (case-insensitive).
 
     Raises click.BadParameter if path is unsafe.
-
-    Blocks: ../../../etc/passwd (relative) and /foo/../../../etc/passwd (absolute).
-    Allows: /tmp/plan.json, ./plan.json, plan.json, /absolute/output/path.json.
-    Requires .json extension.
     """
-    # Reject paths containing '..' segments BEFORE resolution
-    # This catches both relative (../../../) and absolute (/foo/../../../) attempts
+    # Reject paths containing '..' segments
     if '..' in Path(path_str).parts:
         raise click.BadParameter(
-            f"Output path may not contain '..' traversal. Got: {path_str}"
+            f"Output path may not contain '..' traversal for safety. "
+            f"Use an absolute or current-directory path. Got: {path_str}"
         )
 
     resolved = Path(path_str).resolve()
 
-    # Require .json extension
-    if not resolved.suffix == '.json':
+    # Require .json extension (case-insensitive)
+    if resolved.suffix.lower() != '.json':
         raise click.BadParameter(
-            f"Output file must have .json extension. Got: {path_str}"
+            f"Output path must have .json extension. Got: {path_str}"
         )
 
     return str(resolved)
@@ -212,6 +221,9 @@ def inspect(plex_db, output):
 
         # Collections
         _info(f"Collections: {plan['collection_count']:,} found")
+        smart_count = sum(1 for c in plan.get('collections', []) if c.get('is_smart'))
+        if smart_count:
+            _info(f"  ({smart_count} smart/dynamic collection(s) — membership is computed at runtime, not stored in DB)")
 
         # Custom artwork
         artwork_count = plan.get('custom_artwork_count', 0)
@@ -221,8 +233,15 @@ def inspect(plex_db, output):
             _info("Custom artwork: no local poster/art files detected")
 
         # --- Write plan ---
-        with open(output_path, 'w') as f:
-            json.dump(plan, f, indent=2, default=str)
+        try:
+            with open(output_path, 'w') as f:
+                json.dump(plan, f, indent=2, default=str)
+        except OSError as e:
+            _error(
+                f"Cannot write report to {output_path}: {e.strerror}. "
+                f"Check that the directory exists and is writable."
+            )
+            sys.exit(1)
 
         _info("Inspect complete. Plex DB was read-only (temp copy created if WAL detected).")
         _info(f"Report saved to {output_path}")

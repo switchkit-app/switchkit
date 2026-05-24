@@ -1,4 +1,4 @@
-# Switch Kit v0.1.3
+# Switch Kit v0.1.4
 
 **Plex → Jellyfin migration readiness inspector.**
 
@@ -19,7 +19,7 @@ pip install switchkit
 switchkit inspect --plex-db /var/lib/plex/db/com.plexapp.plugins.library.db
 ```
 
-## What v0.1.0 Does
+## What v0.1.4 Does
 
 | Feature | Status |
 |---------|--------|
@@ -28,7 +28,8 @@ switchkit inspect --plex-db /var/lib/plex/db/com.plexapp.plugins.library.db
 | Ratings extraction | ✅ |
 | Resume position extraction | ✅ |
 | User account listing (local + external) | ✅ |
-| Collection inventory | ✅ |
+| Collection inventory (smart/dynamic flagged) | ✅ |
+| SMART collection detection | ✅ |
 | GUID format diagnostics (legacy vs modern) | ✅ |
 | **Jellyfin write mode** | 🚧 Not built yet |
 | **Backup/rollback** | 🚧 Not built yet |
@@ -44,7 +45,7 @@ switchkit inspect --plex-db /var/lib/plex/db/com.plexapp.plugins.library.db
 
 ```
 $ switchkit inspect --plex-db com.plexapp.plugins.library.db
-[INFO]  switchkit v0.1.0 — migration readiness inspector
+[INFO]  switchkit v0.1.4 — migration readiness inspector
 [INFO]  Plex DB: com.plexapp.plugins.library.db (v140)
 [INFO]  GUID formats: legacy: 5000, modern: 12000
 [INFO]  Found 3 libraries: Movies (2,184), TV Shows (18,421 episodes), Music (3,809 tracks)
@@ -71,4 +72,4 @@ $ switchkit inspect --plex-db com.plexapp.plugins.library.db
 
 ## License
 
-AGPL-3.0. Source: https://github.com/switchkit/plex-to-jellyfin
+AGPL-3.0. Source: https://github.com/switchkit-app/switchkit

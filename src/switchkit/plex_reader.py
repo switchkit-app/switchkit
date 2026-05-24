@@ -207,6 +207,13 @@ class PlexReader:
         self._tmp_dir: Optional[str] = None
         # Cache for external ID lookups (modern GUIDs)
         self._external_id_cache: dict[int, list[tuple[str, str]]] = {}
+        # Schema health tracking: distinguishes 'ok' vs 'unavailable' (empty data)
+        self._status = {
+            'collections': {'status': 'ok', 'reason': None},
+            'collection_memberships': {'status': 'ok', 'reason': None},
+            'custom_artwork': {'status': 'ok', 'reason': None},
+            'external_ids': {'status': 'ok', 'reason': None},
+        }
 
     @staticmethod
     def _fetch_batches(cursor: sqlite3.Cursor, batch_size: int = BATCH_SIZE):
@@ -327,6 +334,10 @@ class PlexReader:
                     self._external_id_cache[item_id].append((provider, ext_id))
         except sqlite3.OperationalError:
             logger.debug("External ID tags table not found — modern GUIDs will be unresolved")
+            self._status['external_ids'] = {
+                'status': 'unavailable',
+                'reason': 'Tags/taggings table missing or schema mismatch',
+            }
 
     def _resolve_external_id(self, metadata_item_id: int) -> tuple[Optional[str], Optional[str]]:
         """Resolve external IDs for a metadata item (modern GUIDs).
@@ -363,27 +374,53 @@ class PlexReader:
         return dist
 
     def get_users(self) -> list[PlexUser]:
-        """Get all Plex user accounts (local)."""
-        # Real Plex accounts table may or may not have 'thumb' column.
-        # Query columns that definitely exist: id, name.
+        """Get all Plex user accounts (local + external/shared)."""
+        # Read local accounts
         try:
-            rows = self.conn.execute(
+            local_rows = self.conn.execute(
                 "SELECT id, name FROM accounts ORDER BY id"
             ).fetchall()
         except sqlite3.Error as e:
             logger.warning("Cannot read accounts table: %s", e)
-            return []
+            local_rows = []
+
+        local_ids = {row['id'] for row in local_rows}
+
+        # Discover external/shared users via LEFT JOIN (avoids NOT IN fragility)
+        # Only users with watch/rating activity are surfaced
+        try:
+            external_rows = self.conn.execute("""
+                SELECT DISTINCT mis.account_id as id
+                FROM metadata_item_settings mis
+                LEFT JOIN accounts a ON a.id = mis.account_id
+                WHERE a.id IS NULL
+                  AND mis.account_id IS NOT NULL
+                  AND (mis.view_count > 0 OR mis.view_offset > 0 OR mis.rating IS NOT NULL)
+                ORDER BY mis.account_id
+            """).fetchall()
+        except sqlite3.Error as e:
+            logger.warning("Cannot discover external users: %s", e)
+            external_rows = []
+
+        # Merge: local accounts first, then discovered external accounts
+        all_rows = list(local_rows)
+        for ext in external_rows:
+            if ext['id'] not in local_ids:
+                all_rows.append({'id': ext['id'], 'name': None})
 
         users = []
-        for row in rows:
-            is_managed = (row['name'] or '').startswith('Managed User:') or \
-                         row['name'] == 'Guest'
+        for row in all_rows:
+            name = row['name']
+            is_external = name is None
+            if is_external:
+                name = f'External User {row["id"]}'
+            is_managed = (name or '').startswith('Managed User:') or name == 'Guest'
             users.append(PlexUser(
                 id=row['id'],
-                name=row['name'] or 'Unknown',
+                name=name,
                 thumb=None,
                 is_managed=is_managed,
-                is_external=False,
+                is_external=is_external,
             ))
         return users
 
@@ -400,7 +437,7 @@ class PlexReader:
             FROM library_sections ls
             LEFT JOIN metadata_items mi
                 ON mi.library_section_id = ls.id
-                AND mi.metadata_type IN (1, 4, 8, 10)  -- movie, episode, track, album
+                AND mi.metadata_type IN (1, 4, 9, 10)  -- movie, episode, album, track
             GROUP BY ls.id
             ORDER BY ls.id
         """).fetchall()
@@ -546,6 +583,10 @@ class PlexReader:
         except sqlite3.Error as e:
             logger.warning("Collections schema not found (%s). "
                            "Collections data unavailable.", e)
+            self._status['collections'] = {
+                'status': 'unavailable',
+                'reason': f"Schema error: {e}",
+            }
             return []
 
     def get_custom_artwork(self) -> list[CustomArtwork]:
@@ -577,9 +618,13 @@ class PlexReader:
                 )
                 for row in rows
             ]
-        except sqlite3.Error as e:
+        except sqlite3.OperationalError as e:
             logger.warning("Artwork columns not found (%s). "
                            "Custom artwork data unavailable.", e)
+            self._status['custom_artwork'] = {
+                'status': 'unavailable',
+                'reason': f"Schema error: {e}",
+            }
             return []
 
     def get_diagnostics(self) -> dict:
@@ -644,25 +689,39 @@ class PlexReader:
         # Row processing and external-ID resolution have their own guards.
         try:
             cursor = self.conn.execute("""
-                SELECT
+                SELECT DISTINCT
                     coll.id as collection_id,
                     coll.title as collection_title,
                     mi.id as metadata_item_id,
                     mi.metadata_type,
                     mi.title as item_title,
-                    mi.guid as item_guid
+                    mi.guid as item_guid,
+                    parent.id as parent_item_id,
+                    parent.\"index\" as season_number,
+                    parent.title as season_title,
+                    grandparent.id as grandparent_item_id,
+                    grandparent.title as show_title,
+                    mi.\"index\" as episode_number
                 FROM metadata_items coll
                 JOIN tags t ON t.tag_type = 2
                             AND t.tag = coll.title
-                            AND t.metadata_item_id = coll.id
+                            AND (t.metadata_item_id = coll.id OR t.metadata_item_id IS NULL)
                 JOIN taggings tg ON tg.tag_id = t.id
                 JOIN metadata_items mi ON mi.id = tg.metadata_item_id
+                LEFT JOIN metadata_items parent
+                    ON parent.id = mi.parent_id AND mi.metadata_type IN (3, 4)
+                LEFT JOIN metadata_items grandparent
+                    ON grandparent.id = parent.parent_id AND mi.metadata_type = 4
                 WHERE coll.metadata_type = 18
                 ORDER BY coll.title, mi.title
             """)
-        except sqlite3.Error as e:
+        except sqlite3.OperationalError as e:
             logger.warning("Collection membership schema not found (%s). "
                            "Collection membership data unavailable.", e)
+            self._status['collection_memberships'] = {
+                'status': 'unavailable',
+                'reason': f"Schema error: {e}",
+            }
             return []
 
         # Materialize rows before nested external-ID lookups so a
@@ -675,9 +734,17 @@ class PlexReader:
             ext_provider = None
             ext_id = None
 
-            if fmt == 'modern' and row['metadata_item_id']:
+            if fmt == 'modern':
+                meta_type = row['metadata_type']
+                resolve_id = row['metadata_item_id']
+                # TV episodes: external IDs live on grandparent show
+                if meta_type == 4 and row['grandparent_item_id']:
+                    resolve_id = row['grandparent_item_id']
+                # TV seasons: external IDs live on parent show
+                elif meta_type == 3 and row['parent_item_id']:
+                    resolve_id = row['parent_item_id']
                 try:
-                    ext_provider, ext_id = self._resolve_external_id(row['metadata_item_id'])
+                    ext_provider, ext_id = self._resolve_external_id(resolve_id)
                 except sqlite3.Error as e:
                     logger.warning(
                         "Could not resolve external ID for collection item %s "
@@ -691,8 +758,12 @@ class PlexReader:
                 'collection_id': row['collection_id'],
                 'collection_title': row['collection_title'],
                 'metadata_item_id': row['metadata_item_id'],
+                'media_type': MEDIA_TYPE_MAP.get(row['metadata_type'], 'unknown'),
                 'item_title': row['item_title'],
                 'item_guid': guid,
+                'show_title': row['show_title'],
+                'season_number': row['season_number'],
+                'episode_number': row['episode_number'] if row['metadata_type'] == 4 else None,
                 'external_id_provider': ext_provider,
                 'external_id': ext_id,
             })
@@ -739,5 +810,6 @@ class PlexReader:
             'watch_states': [asdict(w) for w in watch_states],
             'custom_artwork_count': len(artwork),
             'custom_artwork': [asdict(a) for a in artwork],
+            'status': {k: dict(v) for k, v in self._status.items()},
             'diagnostics': diagnostics,
         }

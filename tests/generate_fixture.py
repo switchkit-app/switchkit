@@ -323,6 +323,18 @@ def create_test_db():
 
     # 4K Collection: smart, no membership rows (tests L6)
 
+    # Awesome Shows: collection with TV episode (tests M2 TV resolution)
+    db.execute(
+        """INSERT INTO metadata_items
+           (id, library_section_id, metadata_type, title, guid)
+           VALUES (304, 0, 18, 'Awesome Shows', 'collection-awesome')""")
+
+    db.execute("INSERT INTO tags (id, metadata_item_id, tag, tag_type) VALUES (?, ?, ?, 2)",
+               (tag_id, 304, 'Awesome Shows'))
+    db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (112, ?)",
+               (tag_id,))
+    tag_id += 1
+
     # --- Custom artwork (C-B fix: *_url columns) ---
     db.execute("UPDATE metadata_items SET user_thumb_url = 'upload://posters/the_matrix_custom' WHERE id = 1")
     db.execute("UPDATE metadata_items SET user_art_url = 'upload://backgrounds/interstellar_bg' WHERE id = 3")
