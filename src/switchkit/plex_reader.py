@@ -285,18 +285,11 @@ class PlexReader:
         """Get the Plex database schema version."""
         try:
             row = self.conn.execute(
-                "SELECT schema_version FROM schema_version"
+                "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1"
             ).fetchone()
             return str(row[0]) if row else None
-        except sqlite3.OperationalError:
-            try:
-                row = self.conn.execute(
-                    "SELECT version FROM migrations ORDER BY version DESC LIMIT 1"
-                ).fetchone()
-                return str(row[0]) if row else None
-            except sqlite3.OperationalError:
-                return "unknown"
-
+        except sqlite3.Error:
+            return "unknown"
     def _load_external_ids(self) -> None:
         """Preload all external IDs from tags/taggings (tag_type=314).
 
