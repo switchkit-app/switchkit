@@ -181,10 +181,10 @@ class TestPlexReader:
         assert ext_id is not None
 
     def test_watch_states_include_external_users(self, reader):
-        """M1 fix: external user (id=99) watch states included."""
+        """M1 fix: external user (id=99) watch states included (deduped per H-B)."""
         states = reader.get_watch_states()
         external_states = [s for s in states if s.user_id == 99]
-        assert len(external_states) == 1
+        assert len(external_states) == 1  # H-B dedup: one per GUID
         assert 'External User 99' in external_states[0].user_name
 
     def test_watch_states_tv_episode_identity(self, reader):
@@ -237,20 +237,19 @@ class TestPlexReader:
 
     def test_watch_states_count(self, reader):
         states = reader.get_watch_states()
-        # 14 watch states: 13 from the fixture data + adjustments
-        # admin: 7 (Matrix, Inception, Interstellar, local, BBx2, Dune)
-        # sarah: 4 (Matrix, Fight Club, Stranger Things, no-ID)
-        # guest: 1 (Matrix)
-        # external 99: 1 (Matrix)
+        # H-B dedup: The Matrix (non-4K and 4K copy share GUID — dedup picks one)
+        # admin: 7, sarah: 4, guest: 1, external 99: 1 = 13
         assert len(states) == 13
 
     def test_collections(self, reader):
         collections = reader.get_collections()
-        assert len(collections) == 3
+        # C-A fix: 4 collections (Sci-Fi, 90s, 4K smart, Modern Movies)
+        assert len(collections) == 4
         titles = {c.title for c in collections}
         assert 'Sci-Fi Favorites' in titles
         assert 'Best of the 90s' in titles
         assert '4K Collection' in titles
+        assert 'Modern Movies' in titles
 
     def test_custom_artwork(self, reader):
         """H1 fix: artwork queries user_thumb/user_art, not media_parts."""
@@ -272,7 +271,7 @@ class TestPlexReader:
         """M6 fix: collection memberships resolved to external IDs."""
         memberships = reader.get_collection_memberships()
         # Should have the collection items we inserted, including modern Dune
-        assert len(memberships) == 10
+        assert len(memberships) == 12  # 9 from originals + 3 from Modern Movies
 
         # Verify legacy movie in collection (The Matrix, id=1, in collection 1 and 2)
         matrix_m = [m for m in memberships if m['metadata_item_id'] == 1]
@@ -281,10 +280,10 @@ class TestPlexReader:
             assert m['external_id_provider'] == 'imdb'
             assert m['external_id'] == 'tt0133093'
 
-        # Verify modern movie in collection (Dune, id=20, in collection 1)
+        # Verify modern movie in collection (Dune, id=20, in Modern Movies)
         dune_m = [m for m in memberships if m['metadata_item_id'] == 20]
         assert len(dune_m) == 1
-        assert dune_m[0]['collection_title'] == 'Sci-Fi Favorites'
+        assert dune_m[0]['collection_title'] == 'Modern Movies'
         assert dune_m[0]['external_id_provider'] == 'tmdb'
         assert dune_m[0]['external_id'] == '438631'
 

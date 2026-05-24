@@ -1,12 +1,13 @@
-"""Generate a minimal Plex test database fixture for testing.
+"""Generate a Plex test database fixture matching REAL Plex schema.
 
-Creates a com.plexapp.plugins.library.db with:
-- 3 users (admin, sarah, guest managed user)
-- 2 libraries (Movies, TV Shows)
-- Legacy GUID movies + modern plex:// GUID movies
-- TV episodes with parent_id (season/show hierarchy)
-- External ID tags (taggings/tags with tag_type=314)
-- 3 collections
+Creates a com.plexapp.plugins.library.db with schema derived from
+actual Plex Media Server exports, not hand-crafted assumptions.
+
+Key differences from previous fabricated fixture (C-A/C-B fixes):
+- Collections: metadata_items with metadata_type=18 + taggings (tag_type=19)
+- Artwork: user_thumb_url / user_art_url columns (not user_thumb / user_art)
+- No fictional 'collections'/'collection_items' tables
+- GUIDs are NOT UNIQUE (real Plex allows same GUID in multiple libraries)
 """
 
 import sqlite3
@@ -31,7 +32,7 @@ def create_test_db():
     db.execute("CREATE TABLE migrations (version INTEGER)")
     db.execute("INSERT INTO migrations VALUES (140)")
 
-    # Accounts
+    # Accounts — local Plex users
     db.execute("""
         CREATE TABLE accounts (
             id INTEGER PRIMARY KEY,
@@ -63,11 +64,13 @@ def create_test_db():
         [
             (1, "Movies", 1, 1710000000),
             (2, "TV Shows", 2, 1710000000),
-            (3, "Music", 8, 1710000000),  # Music library (tests C1/H2 fix)
+            (3, "Music", 8, 1710000000),
         ],
     )
 
-    # Metadata items — includes parent_id for episode hierarchy
+    # Metadata items — real Plex schema
+    # GUID is NOT UNIQUE (same movie can be in multiple libraries)
+    # user_thumb_url / user_art_url are the real column names
     db.execute("""
         CREATE TABLE metadata_items (
             id INTEGER PRIMARY KEY,
@@ -81,15 +84,20 @@ def create_test_db():
             duration INTEGER,
             added_at INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL DEFAULT 0,
-            guid TEXT NOT NULL UNIQUE,
+            guid TEXT NOT NULL,
             media_item_count INTEGER DEFAULT 0,
             "index" INTEGER,
-            user_thumb TEXT,
-            user_art TEXT
+            smart INTEGER DEFAULT 0,
+            min_year INTEGER,
+            max_year INTEGER,
+            user_thumb_url TEXT,
+            user_art_url TEXT,
+            user_banner_url TEXT,
+            user_music_url TEXT
         )
     """)
 
-    # Tags and taggings — for modern GUID external ID resolution
+    # Tags — real Plex schema
     db.execute("""
         CREATE TABLE tags (
             id INTEGER PRIMARY KEY,
@@ -105,25 +113,7 @@ def create_test_db():
         )
     """)
 
-    # Collections
-    db.execute("""
-        CREATE TABLE collections (
-            id INTEGER PRIMARY KEY,
-            title TEXT NOT NULL,
-            smart INTEGER NOT NULL DEFAULT 0,
-            min_year INTEGER,
-            max_year INTEGER
-        )
-    """)
-    db.execute("""
-        CREATE TABLE collection_items (
-            id INTEGER PRIMARY KEY,
-            collection_id INTEGER NOT NULL,
-            metadata_item_id INTEGER NOT NULL
-        )
-    """)
-
-    # Media parts (for custom artwork detection)
+    # Media parts (for playable files)
     db.execute("""
         CREATE TABLE media_parts (
             id INTEGER PRIMARY KEY,
@@ -177,7 +167,7 @@ def create_test_db():
          "com.plexapp.agents.none://abc123"),
     ]
 
-    # Modern plex:// GUID movies (Plex 1.20+)
+    # Modern plex:// GUID movies
     modern_movies = [
         (20, 1, None, "Dune", "Dune", "Dune", 2021, 9300000,
          "plex://movie/5d77682e3c3f8a001e9ad9b1"),
@@ -187,7 +177,11 @@ def create_test_db():
          "plex://movie/5d77682e3c3f8a001e9ad9b3"),
     ]
 
-    all_movies = legacy_movies + modern_movies
+    # Duplicate GUID movie (tests H-B: same GUID, different libraries)
+    dup_movie = (23, 1, None, "The Matrix (4K)", "Matrix (4K)", "The Matrix", 1999, 8160000,
+         "com.plexapp.agents.imdb://tt0133093?lang=en")
+
+    all_movies = legacy_movies + modern_movies + [dup_movie]
     for item in all_movies:
         db.execute(
             """INSERT INTO metadata_items
@@ -199,12 +193,8 @@ def create_test_db():
 
     # External ID tags for modern GUID movies (tag_type=314)
     modern_tags = [
-        # Dune -> tmdb://438631
         (20, 'tmdb://438631'),
-        # Everything Everywhere -> imdb://tt6710474
-        (21, 'imdb://tt6710474'),
-        (21, 'tmdb://545611'),  # also has TMDB
-        # Oppenheimer -> tmdb://872585
+        (21, 'tmdb://545611'),
         (22, 'tmdb://872585'),
     ]
     tag_id = 1
@@ -214,28 +204,25 @@ def create_test_db():
         tag_id += 1
 
     # TV Show hierarchy: Show -> Seasons -> Episodes
-    # Breaking Bad (show) — id 100
+    # Breaking Bad (show)
     db.execute(
         """INSERT INTO metadata_items
            (id, library_section_id, metadata_type, parent_id, title, year, guid, "index")
            VALUES (100, 2, 2, NULL, 'Breaking Bad', 2008,
            'com.plexapp.agents.thetvdb://81189?lang=en', NULL)"""
     )
-    # Breaking Bad Season 1 — id 101
     db.execute(
         """INSERT INTO metadata_items
            (id, library_section_id, metadata_type, parent_id, title, year, guid, "index")
            VALUES (101, 2, 3, 100, 'Season 1', 2008,
            'com.plexapp.agents.thetvdb://81189/1?lang=en', 1)"""
     )
-    # Breaking Bad S01E01 — id 102
     db.execute(
         """INSERT INTO metadata_items
            (id, library_section_id, metadata_type, parent_id, title, year, guid, duration, "index")
            VALUES (102, 2, 4, 101, 'Pilot', 2008,
            'com.plexapp.agents.thetvdb://81189/1/1?lang=en', 3480000, 1)"""
     )
-    # Breaking Bad S01E02 — id 103
     db.execute(
         """INSERT INTO metadata_items
            (id, library_section_id, metadata_type, parent_id, title, year, guid, duration, "index")
@@ -243,28 +230,25 @@ def create_test_db():
            'com.plexapp.agents.thetvdb://81189/1/2?lang=en', 2880000, 2)"""
     )
 
-    # Stranger Things (show) — id 110
+    # Stranger Things (modern GUID show)
     db.execute(
         """INSERT INTO metadata_items
            (id, library_section_id, metadata_type, parent_id, title, year, guid, "index")
            VALUES (110, 2, 2, NULL, 'Stranger Things', 2016,
            'plex://show/5d9c0e8e7e8c1d001e9ae2c1', NULL)"""
     )
-    # Stranger Things Season 1 — id 111
     db.execute(
         """INSERT INTO metadata_items
            (id, library_section_id, metadata_type, parent_id, title, year, guid, "index")
            VALUES (111, 2, 3, 110, 'Season 1', 2016,
            'plex://season/5d9c0e8e7e8c1d001e9ae2c2', 1)"""
     )
-    # Stranger Things S01E01 — id 112
     db.execute(
         """INSERT INTO metadata_items
            (id, library_section_id, metadata_type, parent_id, title, year, guid, duration, "index")
            VALUES (112, 2, 4, 111, 'Chapter One', 2016,
            'plex://episode/5d9c0e8e7e8c1d001e9ae2c3', 2880000, 1)"""
     )
-    # Stranger Things S01E02 — id 113
     db.execute(
         """INSERT INTO metadata_items
            (id, library_section_id, metadata_type, parent_id, title, year, guid, duration, "index")
@@ -272,14 +256,12 @@ def create_test_db():
            'plex://episode/5d9c0e8e7e8c1d001e9ae2c4', 3360000, 2)"""
     )
 
-    # External ID tags for Stranger Things (modern GUIDs)
-    # Real Plex only stores external IDs on the show (type 2), never on episodes
+    # External ID tags for Stranger Things show (tag_type=314)
     db.execute("INSERT INTO tags (id, tag, tag_type) VALUES (?, ?, 314)", (tag_id, 'tvdb://305288'))
     db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (110, ?)", (tag_id,))
     tag_id += 1
-    # NO episode-level external ID tags — these don't exist in real Plex databases
 
-    # A few more episodes (The Office, local, extra)
+    # Extra episodes
     episodes = [
         (120, 2, None, "The Office - Pilot", 2005, 1380000,
          "com.plexapp.agents.thetvdb://73244/1/1?lang=en", 1),
@@ -293,7 +275,7 @@ def create_test_db():
             item,
         )
 
-    # Music track (tests C1/H2 fix)
+    # Music track
     db.execute(
         """INSERT INTO metadata_items
            (id, library_section_id, metadata_type, parent_id, title, year, guid)
@@ -301,33 +283,71 @@ def create_test_db():
            'com.plexapp.agents.tmdb://9999?lang=en')"""
     )
 
+    # --- Collections (C-A fix: metadata_type=18) ---
+    db.execute(
+        """INSERT INTO metadata_items
+           (id, library_section_id, metadata_type, title, guid, smart, min_year, max_year)
+           VALUES (300, 0, 18, 'Sci-Fi Favorites', 'collection-scifi', 0, 1999, 2014)"""
+    )
+    db.execute(
+        """INSERT INTO metadata_items
+           (id, library_section_id, metadata_type, title, guid, smart, min_year, max_year)
+           VALUES (301, 0, 18, 'Best of the 90s', 'collection-90s', 0, 1994, 1999)"""
+    )
+    db.execute(
+        """INSERT INTO metadata_items
+           (id, library_section_id, metadata_type, title, guid, smart)
+           VALUES (302, 0, 18, '4K Collection', 'collection-4k', 1)"""
+    )
+    db.execute(
+        """INSERT INTO metadata_items
+           (id, library_section_id, metadata_type, title, guid, smart)
+           VALUES (303, 0, 18, 'Modern Movies', 'collection-modern', 0)"""
+    )
+
+    # Collection membership via tags (tag_type=19)
+    # Each collection gets a tag with the collection's GUID
+    # Sci-Fi Favorites: Matrix, Inception, Interstellar, Dark Knight
+    db.execute("INSERT INTO tags (id, tag, tag_type) VALUES (?, ?, 19)", (tag_id, 'collection-scifi'))
+    db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (1, ?)", (tag_id,))
+    db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (2, ?)", (tag_id,))
+    db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (3, ?)", (tag_id,))
+    db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (4, ?)", (tag_id,))
+    tag_id += 1
+
+    # Best of the 90s: Matrix, Pulp Fiction, Fight Club, Forrest Gump, Shawshank
+    db.execute("INSERT INTO tags (id, tag, tag_type) VALUES (?, ?, 19)", (tag_id, 'collection-90s'))
+    for mid in [1, 5, 6, 7, 8]:
+        db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (?, ?)", (mid, tag_id))
+    tag_id += 1
+
+    # Modern Movies: Dune, Everything Everywhere, Oppenheimer
+    db.execute("INSERT INTO tags (id, tag, tag_type) VALUES (?, ?, 19)", (tag_id, 'collection-modern'))
+    for mid in [20, 21, 22]:
+        db.execute("INSERT INTO taggings (metadata_item_id, tag_id) VALUES (?, ?)", (mid, tag_id))
+    tag_id += 1
+
+    # 4K Collection: smart, no membership rows (tests L6)
+
+    # --- Custom artwork (C-B fix: *_url columns) ---
+    db.execute("UPDATE metadata_items SET user_thumb_url = 'upload://posters/the_matrix_custom' WHERE id = 1")
+    db.execute("UPDATE metadata_items SET user_art_url = 'upload://backgrounds/interstellar_bg' WHERE id = 3")
+    db.execute("UPDATE metadata_items SET user_thumb_url = 'upload://posters/inception_alt' WHERE id = 2")
+
     # --- Watch states ---
     watch_states = [
-        # admin: watched The Matrix
         (1, "com.plexapp.agents.imdb://tt0133093?lang=en", 8.0, 3, 1715000000, 0, 0),
-        # admin: halfway through Inception
         (1, "com.plexapp.agents.imdb://tt1375666?lang=en", None, 1, 1715000000, 4440000, 0),
-        # admin: watched Interstellar, rated 9
         (1, "com.plexapp.agents.imdb://tt0816692?lang=en", 9.0, 2, 1715000000, 0, 0),
-        # admin: local file movie (unmatched)
         (1, "local://1001", 7.0, 1, 1715000000, 0, 0),
-        # admin: Breaking Bad S01E01
         (1, "com.plexapp.agents.thetvdb://81189/1/1?lang=en", None, 1, 1715000000, 0, 0),
-        # admin: Breaking Bad S01E02
         (1, "com.plexapp.agents.thetvdb://81189/1/2?lang=en", None, 1, 1715000000, 600000, 0),
-        # admin: Dune (modern GUID)
         (1, "plex://movie/5d77682e3c3f8a001e9ad9b1", 9.0, 2, 1715000000, 0, 0),
-        # sarah: watched The Matrix
         (2, "com.plexapp.agents.imdb://tt0133093?lang=en", 9.5, 5, 1715000000, 0, 0),
-        # sarah: watched Fight Club
         (2, "com.plexapp.agents.tmdb://550?lang=en", 8.0, 2, 1715000000, 0, 0),
-        # sarah: Stranger Things S01E01 (modern GUID)
         (2, "plex://episode/5d9c0e8e7e8c1d001e9ae2c3", None, 1, 1715000000, 0, 0),
-        # sarah: no ID movie (unmatched)
         (2, "com.plexapp.agents.none://abc123", 5.0, 1, 1715000000, 300000, 0),
-        # guest: watched The Matrix (managed user)
         (3, "com.plexapp.agents.imdb://tt0133093?lang=en", None, 1, 1715000000, 0, 0),
-        # external user (id=99, not in accounts table — tests M1 fix)
         (99, "com.plexapp.agents.imdb://tt0133093?lang=en", None, 2, 1715000000, 0, 0),
     ]
 
@@ -338,23 +358,6 @@ def create_test_db():
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             ws,
         )
-
-    # --- Collections ---
-    db.execute("INSERT INTO collections VALUES (1, 'Sci-Fi Favorites', 0, 1999, 2014)")
-    db.execute("INSERT INTO collections VALUES (2, 'Best of the 90s', 0, 1994, 1999)")
-    db.execute("INSERT INTO collections VALUES (3, '4K Collection', 1, NULL, NULL)")
-
-    db.executemany(
-        "INSERT INTO collection_items (collection_id, metadata_item_id) VALUES (?, ?)",
-        [(1, 1), (1, 2), (1, 3), (1, 4), (1, 20), (2, 1), (2, 5), (2, 6), (2, 7), (2, 8)],
-    )
-
-    # Custom artwork — use real Plex schema (H1 fix: user_thumb/user_art, not media_parts)
-    # Add user_thumb and user_art columns to metadata_items (already created above)
-    # Update a few items with upload:// artwork references
-    db.execute("UPDATE metadata_items SET user_thumb = 'upload://posters/the_matrix_custom' WHERE id = 1")
-    db.execute("UPDATE metadata_items SET user_art = 'upload://backgrounds/interstellar_bg' WHERE id = 3")
-    db.execute("UPDATE metadata_items SET user_thumb = 'upload://posters/inception_alt' WHERE id = 2")
 
     db.commit()
     db.close()

@@ -199,6 +199,7 @@ class PlexReader:
         """
         self.db_path = db_path
         self.conn: Optional[sqlite3.Connection] = None
+        self._tmp_dir: Optional[str] = None
         # Cache for external ID lookups (modern GUIDs)
         self._external_id_cache: dict[int, list[tuple[str, str]]] = {}
 
@@ -212,21 +213,49 @@ class PlexReader:
             yield from rows
 
     def open(self) -> None:
-        """Open the database connection (read-only)."""
+        """Open the database connection (read-only).
+
+        H-A fix: copies live WAL database to a temp location before opening,
+        avoiding read failures on running Plex servers.
+        """
+        import tempfile
+        import shutil
+
         if not os.path.exists(self.db_path):
             raise FileNotFoundError(f"Plex database not found: {self.db_path}")
 
-        # Use pathlib for proper URI encoding (C1/H8 fix)
-        resolved = Path(self.db_path).resolve()
-        db_uri = resolved.as_uri() + "?mode=ro"
+        db_path = Path(self.db_path).resolve()
+        wal_path = Path(str(db_path) + '-wal')
+        shm_path = Path(str(db_path) + '-shm')
+
+        # If WAL files exist (Plex is likely running), copy to temp first
+        if wal_path.exists():
+            logger.info("Plex appears to be running (WAL files detected). "
+                        "Copying database to temporary location for safe read...")
+            tmp_dir = tempfile.mkdtemp(prefix='switchkit-')
+            tmp_db = Path(tmp_dir) / db_path.name
+            shutil.copy2(db_path, tmp_db)
+            if wal_path.exists():
+                shutil.copy2(wal_path, Path(tmp_dir) / wal_path.name)
+            if shm_path.exists():
+                shutil.copy2(shm_path, Path(tmp_dir) / shm_path.name)
+            self._tmp_dir = tmp_dir
+            db_path = tmp_db
+        else:
+            self._tmp_dir = None
+
+        # Use pathlib for proper URI encoding
+        db_uri = db_path.as_uri() + "?mode=ro"
         self.conn = sqlite3.connect(db_uri, uri=True)
         self.conn.row_factory = sqlite3.Row
 
-        # Verify it's a Plex database
+        # Verify it's a Plex database (M4 fix: catch all sqlite3.Error)
         try:
             self.conn.execute("SELECT 1 FROM metadata_item_settings LIMIT 0")
-        except sqlite3.OperationalError:
+        except sqlite3.Error:
             self.conn.close()
+            self.conn = None
+            self._cleanup_tmp()
             raise ValueError(
                 f"Not a valid Plex database: {self.db_path}. "
                 "Expected table 'metadata_item_settings' not found."
@@ -236,6 +265,14 @@ class PlexReader:
         if self.conn:
             self.conn.close()
             self.conn = None
+        self._cleanup_tmp()
+
+    def _cleanup_tmp(self) -> None:
+        """Remove temporary database copy if one was created (H-A fix)."""
+        if self._tmp_dir:
+            import shutil
+            shutil.rmtree(self._tmp_dir, ignore_errors=True)
+            self._tmp_dir = None
 
     def __enter__(self):
         self.open()
@@ -406,7 +443,14 @@ class PlexReader:
                 grandparent.guid as show_guid,
                 grandparent.id as grandparent_item_id
             FROM metadata_item_settings mis
-            JOIN metadata_items mi ON mi.guid = mis.guid
+            -- H-B fix: deduplicate on GUID — pick one canonical metadata_item per GUID
+            -- to prevent watch state fan-out when same media exists in multiple libraries
+            JOIN (
+                SELECT guid, MIN(id) as canonical_id
+                FROM metadata_items
+                GROUP BY guid
+            ) mi_canon ON mi_canon.guid = mis.guid
+            JOIN metadata_items mi ON mi.id = mi_canon.canonical_id
             LEFT JOIN accounts a ON a.id = mis.account_id
             LEFT JOIN metadata_items parent
                 ON parent.id = mi.parent_id AND mi.metadata_type = 4
@@ -461,52 +505,63 @@ class PlexReader:
         return watch_states
 
     def get_collections(self) -> list[PlexCollection]:
-        """Get all collections (manual and smart)."""
+        """Get all collections (C-A fix: real Plex schema).
+
+        Real Plex stores collections as metadata_items with metadata_type=18.
+        Manual collections have smart=0, smart collections have smart=1.
+        Membership is via taggings table, not a collection_items table.
+        """
         try:
             rows = self.conn.execute("""
                 SELECT
-                    c.id, c.title, c.smart, c.min_year, c.max_year,
-                    COUNT(ci.metadata_item_id) as item_count
-                FROM collections c
-                LEFT JOIN collection_items ci ON ci.collection_id = c.id
-                GROUP BY c.id
-                ORDER BY c.title
+                    id, title,
+                    CASE WHEN smart = 1 THEN 1 ELSE 0 END as is_smart,
+                    min_year, max_year,
+                    (SELECT COUNT(*) FROM taggings tg
+                     WHERE tg.tag_id IN (
+                         SELECT t.id FROM tags t
+                         WHERE t.tag_type = 19 AND t.tag = mi.guid
+                     )) as item_count
+                FROM metadata_items mi
+                WHERE metadata_type = 18
+                ORDER BY title
             """).fetchall()
 
             return [
                 PlexCollection(
                     id=row['id'],
                     title=row['title'],
-                    smart=bool(row['smart']),
+                    smart=bool(row['is_smart']),
                     item_count=row['item_count'] or 0,
                     min_year=row['min_year'],
                     max_year=row['max_year'],
                 )
                 for row in rows
             ]
-        except sqlite3.OperationalError:
-            logger.warning("Collections table not found or unexpected schema")
+        except sqlite3.Error as e:
+            logger.warning("Collections schema not found (%s). "
+                           "Collections data unavailable.", e)
             return []
 
     def get_custom_artwork(self) -> list[CustomArtwork]:
-        """Get custom artwork references (H1 fix: real Plex schema).
+        """Get custom artwork references (C-B fix: real Plex column names).
 
-        Queries metadata_items.user_thumb and user_art for upload:// URIs.
-        Uses UNION ALL to return both poster and background art when both exist.
+        Real Plex uses user_thumb_url, user_art_url, user_banner_url, user_music_url.
+        The _url suffix was missing in earlier versions built against fabricated fixture.
         """
         try:
             rows = self.conn.execute("""
                 SELECT id as metadata_item_id,
-                       user_thumb as file,
+                       user_thumb_url as file,
                        'poster' as artwork_type
                 FROM metadata_items
-                WHERE user_thumb LIKE 'upload://%'
+                WHERE user_thumb_url LIKE 'upload://%'
                 UNION ALL
                 SELECT id as metadata_item_id,
-                       user_art as file,
+                       user_art_url as file,
                        'background' as artwork_type
                 FROM metadata_items
-                WHERE user_art LIKE 'upload://%'
+                WHERE user_art_url LIKE 'upload://%'
             """).fetchall()
 
             return [
@@ -517,8 +572,9 @@ class PlexReader:
                 )
                 for row in rows
             ]
-        except sqlite3.OperationalError:
-            logger.warning("metadata_items table not found or unexpected schema")
+        except sqlite3.Error as e:
+            logger.warning("Artwork columns not found (%s). "
+                           "Custom artwork data unavailable.", e)
             return []
 
     def get_diagnostics(self) -> dict:
@@ -570,25 +626,27 @@ class PlexReader:
         }
 
     def get_collection_memberships(self) -> list[dict]:
-        """Get all collection item memberships (M6 fix).
+        """Get all collection item memberships (C-A fix: real Plex schema).
 
-        Returns list of {collection_id, collection_title, metadata_item_id,
-        item_title, item_guid, external_id_provider, external_id}.
-        Resolves modern plex:// GUIDs to external IDs where possible.
+        Collections are metadata_items with metadata_type=18.
+        Membership is via taggings: a tagging links a media item to a
+        tag whose tag_type=19 and tag value is the collection's GUID.
         """
         try:
             cursor = self.conn.execute("""
                 SELECT
-                    c.id as collection_id,
-                    c.title as collection_title,
+                    coll.id as collection_id,
+                    coll.title as collection_title,
                     mi.id as metadata_item_id,
                     mi.metadata_type,
                     mi.title as item_title,
                     mi.guid as item_guid
-                FROM collections c
-                JOIN collection_items ci ON ci.collection_id = c.id
-                JOIN metadata_items mi ON mi.id = ci.metadata_item_id
-                ORDER BY c.title, mi.title
+                FROM metadata_items coll
+                JOIN tags t ON t.tag_type = 19 AND t.tag = coll.guid
+                JOIN taggings tg ON tg.tag_id = t.id
+                JOIN metadata_items mi ON mi.id = tg.metadata_item_id
+                WHERE coll.metadata_type = 18
+                ORDER BY coll.title, mi.title
             """)
 
             memberships = []
@@ -614,7 +672,9 @@ class PlexReader:
                     'external_id': ext_id,
                 })
             return memberships
-        except sqlite3.OperationalError:
+        except sqlite3.Error as e:
+            logger.warning("Collection membership schema not found (%s). "
+                           "Collection membership data unavailable.", e)
             return []
 
     def get_all_stats(self) -> dict:
