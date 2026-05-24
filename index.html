@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Switch Kit — Plex → Jellyfin migration readiness inspector</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0c0d0f;
+    --bg-panel: #131416;
+    --bg-code: #18191b;
+    --text: #e4e5e7;
+    --text-dim: #9ca3af;
+    --text-faint: #6b7280;
+    --accent: #7c8aff;
+    --border: rgba(255,255,255,0.06);
+    --green: #34d399;
+    --amber: #fbbf24;
+    --radius: 6px;
+    --max-w: 880px;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    font-size: 15px;
+    line-height: 1.65;
+  }
+  code, pre, .mono { font-family: 'JetBrains Mono', ui-monospace, SF Mono, Menlo, monospace; font-size: 13px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .container { max-width: var(--max-w); margin: 0 auto; padding: 0 24px; }
+  nav { border-bottom: 1px solid var(--border); padding: 16px 0; }
+  nav .container { display: flex; align-items: center; gap: 24px; }
+  nav .logo { font-weight: 600; color: var(--text); font-size: 14px; }
+  nav a { font-size: 13px; color: var(--text-dim); }
+  section { padding: 64px 0; border-bottom: 1px solid var(--border); }
+  section:last-of-type { border-bottom: none; }
+  .section-label { font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 500; color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 12px; }
+  h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; margin-bottom: 8px; }
+  .section-desc { font-size: 15px; color: var(--text-dim); margin-bottom: 32px; max-width: 640px; }
+  .terminal { background: var(--bg-code); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 24px; overflow-x: auto; margin-bottom: 16px; }
+  .terminal pre { color: var(--text-dim); line-height: 1.7; margin: 0; white-space: pre; }
+  .terminal .cmd { color: var(--accent); }
+  .terminal .info { color: var(--green); }
+  .terminal .warn { color: var(--amber); }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin-bottom: 24px; }
+  th { text-align: left; font-weight: 500; color: var(--text-faint); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; padding: 12px 16px; border-bottom: 1px solid var(--border); }
+  td { padding: 10px 16px; border-bottom: 1px solid var(--border); color: var(--text-dim); font-size: 14px; }
+  td:first-child { color: var(--text); font-weight: 500; }
+  .badge { display: inline-block; font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 3px; }
+  .badge-yes { background: rgba(52,211,153,0.10); color: var(--green); }
+  .badge-planned { background: rgba(124,138,255,0.08); color: var(--accent); }
+  .badge-no { background: rgba(107,114,128,0.10); color: var(--text-faint); }
+  .btn { display: block; text-align: center; padding: 10px; border-radius: var(--radius); font-size: 14px; font-weight: 500; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-ghost { border: 1px solid var(--border); color: var(--text); }
+  .footer-links { display: flex; gap: 16px; flex-wrap: wrap; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<nav>
+  <div class="container">
+    <span class="logo">Switch Kit</span>
+    <a href="#quickstart">Quick Start</a>
+    <a href="#compatibility">Compatibility</a>
+    <a href="#safety">Safety</a>
+    <a href="https://github.com/switchkit-app/switchkit">GitHub →</a>
+  </div>
+</nav>
+
+<section>
+  <div class="container">
+    <div class="section-label">v0.1.3 — Migration Readiness Inspector</div>
+    <h2>Inspect your Plex library before switching to Jellyfin.</h2>
+    <div class="section-desc">Opens your Plex database <strong>read-only</strong>. Shows what would transfer. Zero writes. No network. No account. <code>switchkit inspect</code> exports a migration plan JSON you can review before committing to the switch.</div>
+
+    <div class="terminal">
+      <pre><span class="cmd">$</span> switchkit inspect --plex-db com.plexapp.plugins.library.db
+
+<span class="info">[INFO]</span>  switchkit v0.1.3 — migration readiness inspector
+<span class="info">[INFO]</span>  Plex DB: com.plexapp.plugins.library.db (v500000000001.231)
+<span class="info">[INFO]</span>  GUID formats: legacy: 5000, modern: 12000
+<span class="info">[INFO]</span>  Found 3 libraries: Movies (2,184), TV Shows (18,421 episodes), Music (3,809 items)
+<span class="info">[INFO]</span>  Found 2 regular Plex users: admin, sarah
+<span class="warn">[WARN]</span>  guest: Plex managed user — standard Jellyfin accounts can be created instead
+<span class="info">[INFO]</span>  Watch states: 12,902 with external ID — 199 without external ID
+<span class="info">[INFO]</span>  Collections: 38 found
+<span class="info">[INFO]</span>  Custom artwork references: 156 found
+<span class="info">[INFO]</span>  Inspect complete. Plex DB was read-only.
+<span class="info">[INFO]</span>  Report saved to migration-plan.json
+<span class="warn">[WARN]</span>  This file contains viewing history — do not share unredacted.</pre>
+    </div>
+  </div>
+</section>
+
+<section id="quickstart">
+  <div class="container">
+    <div class="section-label">Quick Start</div>
+    <h2>Install</h2>
+    <div class="terminal">
+      <pre><span class="cmd"># Docker</span>
+docker run --rm \
+  -v /path/to/plex/db:/plex:ro \
+  -v $(pwd):/output \
+  ghcr.io/switchkit-app/switchkit:v0.1.3 \
+  inspect --plex-db /plex/com.plexapp.plugins.library.db --output /output/plan.json
+
+<span class="cmd"># pip</span>
+pip install git+https://github.com/switchkit-app/switchkit.git
+switchkit inspect --plex-db /var/lib/plex/db/com.plexapp.plugins.library.db</pre>
+    </div>
+  </div>
+</section>
+
+<section id="compatibility">
+  <div class="container">
+    <div class="section-label">Compatibility</div>
+    <h2>What transfers — and what doesn't</h2>
+    <div class="section-desc">Honest about limitations. Self-hosters audit claims — so should you.</div>
+
+    <table>
+      <thead><tr><th>Feature</th><th>Status</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Watch history</td><td><span class="badge badge-yes">Inspected</span></td><td>Matched by TMDB/IMDB/TVDb ID. Modern plex:// GUIDs supported.</td></tr>
+        <tr><td>Resume position</td><td><span class="badge badge-yes">Inspected</span></td><td>Plex view_offset exported for Jellyfin conversion.</td></tr>
+        <tr><td>Ratings</td><td><span class="badge badge-yes">Inspected</span></td><td>User star ratings exported 1:1.</td></tr>
+        <tr><td>User accounts</td><td><span class="badge badge-yes">Inspected</span></td><td>Local + external users listed. Managed users flagged.</td></tr>
+        <tr><td>Collections</td><td><span class="badge badge-yes">Inspected</span></td><td>Collection names and item memberships listed in plan.</td></tr>
+        <tr><td>Custom artwork</td><td><span class="badge badge-yes">Inspected</span></td><td>Custom poster/background references detected.</td></tr>
+        <tr><td>Jellyfin write mode</td><td><span class="badge badge-planned">Planned</span></td><td>In development. Dry-run only for now.</td></tr>
+        <tr><td>Smart collections</td><td><span class="badge badge-no">Not supported</span></td><td>Dynamic rules can't be statically exported.</td></tr>
+        <tr><td>Skip intro / credits</td><td><span class="badge badge-no">Not supported</span></td><td>Plex-specific feature.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="safety">
+  <div class="container">
+    <div class="section-label">Safety</div>
+    <h2>What Switch Kit does — and does not — touch</h2>
+    <div class="section-desc">Read-only. Offline. No credentials. Your database is never modified.</div>
+
+    <div class="terminal">
+      <pre><span class="info">✓</span> Plex DB opened read-only (<code>mode=ro</code>)
+<span class="info">✓</span> If Plex is running, database is copied to temp first
+<span class="info">✓</span> No network calls — runs fully offline
+<span class="info">✓</span> No account or credentials required
+<span class="info">✓</span> Docker container runs as non-root user
+<span class="info">✓</span> Output contains viewing history — do not share unredacted</pre>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="container" style="text-align:center; padding: 48px 0">
+    <h2 style="margin-bottom:16px">Free and open source</h2>
+    <p style="color:var(--text-dim); margin-bottom:24px">AGPL-3.0. Inspect your library. Review the source. No paywall.</p>
+    <a href="https://github.com/switchkit-app/switchkit" class="btn btn-primary" style="display:inline-block; padding:12px 32px">View on GitHub</a>
+    <p style="color:var(--text-faint); font-size:13px; margin-top:12px">v0.1.3 · 35 tests · 6-round audited by Claude Opus, Gemini & ChatGPT</p>
+  </div>
+</section>
+
+<footer style="padding: 24px 0; border-top:1px solid var(--border)">
+  <div class="container">
+    <div class="footer-links">
+      <a href="https://github.com/switchkit-app/switchkit">GitHub</a>
+      <a href="https://github.com/switchkit-app/switchkit/issues">Issues</a>
+      <a href="https://github.com/switchkit-app/switchkit/blob/main/LICENSE">AGPL-3.0</a>
+      <span style="color:var(--text-faint)">switchkitapp.com</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>
